@@ -1,5 +1,4 @@
 import { Liveblocks } from '@liveblocks/node'
-import { NextApiRequest, NextApiResponse } from 'next'
 
 const API_KEY = process.env.LIVEBLOCKS_SECRET_KEY as string
 
@@ -7,17 +6,24 @@ const liveblocks = new Liveblocks({
   secret: API_KEY,
 })
 
-export default async function auth (req: NextApiRequest, res: NextApiResponse) {
+export async function POST(request: Request) {
   if (!API_KEY) {
-    return res.status(403).end()
+    return Response.json(
+      { error: 'Missing LIVEBLOCKS_SECRET_KEY' },
+      { status: 403 }
+    )
   }
+
+  // Parse the request body
+  const body = await request.json()
+  const room = body.room
 
   // For the avatar example, we're generating random users
   // and set their info from the authentication endpoint
   // See https://liveblocks.io/docs/api-reference/liveblocks-node#authorize for more information
   const user = {
     id: Math.random().toString(36).slice(-6),
-    info : {
+    info: {
       name: NAMES[Math.floor(Math.random() * NAMES.length)],
       color: COLORS[Math.floor(Math.random() * COLORS.length)],
       picture: `/assets/avatars/${Math.floor(Math.random() * 10)}.png`
@@ -29,9 +35,13 @@ export default async function auth (req: NextApiRequest, res: NextApiResponse) {
     { userInfo: user.info }
   )
 
-  session.allow(req.body.room, session.FULL_ACCESS)
-  const { status, body } = await session.authorize()
-  return res.status(status).end(body)
+  // Allow access to the room
+  session.allow(room, session.FULL_ACCESS)
+  
+  // Authorize the session
+  const { status, body: responseBody } = await session.authorize()
+  
+  return new Response(responseBody, { status })
 }
 
 const COLORS = [

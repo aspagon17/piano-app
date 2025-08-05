@@ -1,8 +1,19 @@
-import { createClient } from '@liveblocks/client'
+import { createClient, LiveMap, LiveObject } from '@liveblocks/client'
 import { createRoomContext } from '@liveblocks/react'
 
 const client = createClient({
-  authEndpoint: '/api/auth'
+  authEndpoint: async (room?) => {
+    const response = await fetch("/api/auth", {
+      method: "POST",
+      headers: {
+        Authentication: "token",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ room })
+    });
+
+    return await response.json(); // should be: { token: "..." }
+  }
 })
 
 // Presence represents the properties that will exist on every User in the Room
@@ -13,13 +24,16 @@ type Presence = {
   notes: number[]
 }
 
-// Optionally, Storage represents the shared document that persists in the
+// Storage represents the shared document that persists in the
 // Room, even after all Users leave. Fields under Storage typically are
 // LiveList, LiveMap, LiveObject instances, for which updates are
 // automatically persisted and synced to all connected clients.
 type Storage = {
-  // author: LiveObject<{ firstName: string, lastName: string }>,
-  // ...
+  gameState: LiveObject<{
+    isPlaying: boolean;
+    startTime: number; // Unix timestamp for sync
+    scores: LiveMap<string, number>; // userId -> score
+  }>;
 }
 
 // Optionally, UserMeta represents static/readonly metadata on each User, as
@@ -43,7 +57,9 @@ export const {
     RoomProvider,
     useUpdateMyPresence,
     useOthers,
-    useSelf
+    useSelf,
+    useStorage,
+    useMutation
   }
   /* ...all the other hooks you’re using... */
 } = createRoomContext<Presence, Storage, UserMeta/*, RoomEvent */>(client)

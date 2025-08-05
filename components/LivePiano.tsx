@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import SoundfontProvider from './react-piano-custom/SoundfontProvider'
 import { NotePresence } from '../types'
 import { motion } from 'framer-motion'
+import React from 'react'
 
 const instruments: { [name: string]: string } = {
   piano: 'acoustic_grand_piano',
