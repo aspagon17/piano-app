@@ -33,6 +33,8 @@ type Storage = {
     isPlaying: boolean;
     startTime: number; // Unix timestamp for sync
     scores: LiveMap<string, number>; // userId -> score
+    health: number;
+    combo: number;
   }>;
 }
 

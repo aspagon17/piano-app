@@ -4,7 +4,7 @@
 
 @layer base {
   body {
-    @apply bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900;
+    @apply bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900;
     @apply min-h-screen;
   }
 }
@@ -23,7 +23,7 @@ html, body, #__next {
 }
 
 ::-webkit-scrollbar-track {
-  @apply bg-slate-800;
+  @apply bg-indigo-800;
 }
 
 ::-webkit-scrollbar-thumb {
@@ -80,6 +80,12 @@ select:focus-visible {
   }
 }
 
+@keyframes glowPulse {
+  0% { box-shadow: 0 0 5px rgba(0, 255, 255, 0.3); }
+  50% { box-shadow: 0 0 15px rgba(0, 255, 255, 0.6); }
+  100% { box-shadow: 0 0 5px rgba(0, 255, 255, 0.3); }
+}
+
 .animate-fade-in {
   animation: fadeIn 0.5s ease-out;
 }
@@ -88,16 +94,20 @@ select:focus-visible {
   animation: slideUp 0.5s ease-out;
 }
 
+.animate-glow-pulse {
+  animation: glowPulse 1.5s infinite ease-in-out;
+}
+
 /* Blob animation */
 @keyframes blob {
   0% {
     transform: translate(0px, 0px) scale(1);
   }
   33% {
-    transform: translate(30px, -50px) scale(1.1);
+    transform: translate(30px, -50px) scale(1.2);
   }
   66% {
-    transform: translate(-20px, 20px) scale(0.9);
+    transform: translate(-20px, 20px) scale(0.8);
   }
   100% {
     transform: translate(0px, 0px) scale(1);
@@ -105,7 +115,7 @@ select:focus-visible {
 }
 
 .animate-blob {
-  animation: blob 7s infinite;
+  animation: blob 10s infinite;
 }
 
 .animation-delay-2000 {

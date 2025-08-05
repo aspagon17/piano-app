@@ -4,13 +4,16 @@ import { KeyboardShortcuts, MidiNumbers, Piano } from '../components/react-piano
 import 'react-piano/dist/styles.css'
 import { useEffect, useState, ChangeEvent, Fragment, useRef } from 'react'
 import SoundfontProvider from '../components/react-piano-custom/SoundfontProvider'
-import { SongNote, sampleSong, SONG_DURATION } from '../types'
+import { SongNote, SONG_DURATION, sampleSong } from '../types' // Added sampleSong import
 import { motion } from 'framer-motion'
 import { ClientSideSuspense } from '@liveblocks/react'
 import { RoomProvider, useOthers, useSelf, useUpdateMyPresence, useStorage, useMutation } from '../liveblocks.config'
 import LivePiano, { instrumentNames } from '../components/LivePiano'
 import React from 'react'
 import { LiveMap, LiveObject } from '@liveblocks/client'
+import { Midi } from '@tonejs/midi' // New: MIDI parser
+import Dropzone from 'react-dropzone' // New: For MIDI upload
+import Confetti from 'react-confetti' // New: Celebration on high score
 
 const DEFAULT_INSTRUMENT = 'piano'
 
@@ -31,7 +34,7 @@ export default function RootPage() {
     <RoomProvider
       id={'live-piano-' + room}
       initialPresence={{ instrument: DEFAULT_INSTRUMENT, notes: [] }}
-      initialStorage={{ gameState: new LiveObject({ isPlaying: false, startTime: 0, scores: new LiveMap() }) }}
+      initialStorage={{ gameState: new LiveObject({ isPlaying: false, startTime: 0, scores: new LiveMap(), health: 100, combo: 0 }) }}
     >
       <ClientSideSuspense fallback={<Loading />}>
         {() => <PianoDemo />}
@@ -88,6 +91,8 @@ function PianoDemo() {
     game.set('isPlaying', true)
     game.set('startTime', Date.now() + 3000) // 3s countdown
     game.set('scores', new LiveMap())
+    game.set('health', 100)
+    game.set('combo', 0)
   }, [])
 
   const endGame = useMutation(({ storage }) => {
@@ -101,29 +106,69 @@ function PianoDemo() {
     scores.set(userId!, (scores.get(userId!) || 0) + delta)
   }, [])
 
+  const updateHealth = useMutation(({ storage }, delta: number) => {
+    const game = storage.get('gameState')
+    let health = game.get('health') + delta
+    health = Math.max(0, Math.min(100, health))
+    game.set('health', health)
+    if (health <= 0) endGame()
+  }, [])
+
+  const updateCombo = useMutation(({ storage }, delta: number) => {
+    const game = storage.get('gameState')
+    let combo = game.get('combo') + delta
+    if (delta < 0) combo = 0
+    game.set('combo', combo)
+  }, [])
+
   // Tracked notes to avoid duplicate hits
   const hitNotesRef = useRef<Set<number>>(new Set()) // Local only for simplicity
 
-  // Game loop: Miss detection and end game
+  // Custom song from MIDI
+  const [songNotes, setSongNotes] = useState<SongNote[]>(sampleSong)
+  const [songDuration, setSongDuration] = useState(SONG_DURATION)
+  const [songName, setSongName] = useState('Sample Song')
+
+  // Handle MIDI upload
+  const handleMidiUpload = async (files: File[]) => {
+    const file = files[0]
+    if (!file) return
+    const arrayBuffer = await file.arrayBuffer()
+    const midi = new Midi(arrayBuffer)
+    const notes: SongNote[] = []
+    midi.tracks.forEach(track => {
+      track.notes.forEach(note => {
+        notes.push({ note: note.midi, time: note.time * 1000 }) // Convert seconds to ms
+      })
+    })
+    notes.sort((a, b) => a.time - b.time)
+    setSongNotes(notes)
+    setSongDuration(midi.duration * 1000 + 2000) // Buffer for last notes
+    setSongName(file.name.replace('.mid', ''))
+  }
+
+  // Game loop: Miss detection, health drain, and end game
   useEffect(() => {
     if (!gameState?.isPlaying) return
     const interval = setInterval(() => {
       const now = Date.now()
       const elapsed = now - gameState.startTime
-      if (elapsed > SONG_DURATION) {
+      if (elapsed > songDuration) {
         endGame()
         return
       }
       // Check misses
-      sampleSong.forEach((songNote) => {
+      songNotes.forEach((songNote) => {
         if (elapsed > songNote.time + 300 && !hitNotesRef.current.has(songNote.time)) { // 300ms miss window
           updateScore(-20) // Miss penalty
+          updateHealth(-5) // Drain health
+          updateCombo(-1) // Reset combo
           hitNotesRef.current.add(songNote.time) // Mark as missed
         }
       })
     }, 100)
     return () => clearInterval(interval)
-  }, [gameState])
+  }, [gameState, songNotes, songDuration])
 
   // Reset hits on game start
   useEffect(() => {
@@ -141,13 +186,28 @@ function PianoDemo() {
 
     if (gameState?.isPlaying) {
       const elapsed = Date.now() - gameState.startTime
-      const timingWindow = 200 // ms for perfect
-      const hitNote = sampleSong.find((n) => Math.abs(n.time - elapsed) < timingWindow && n.note === note)
+      const perfectWindow = 100 // ms for perfect
+      const goodWindow = 200 // ms for good
+      const hitNote = songNotes.find((n) => Math.abs(n.time - elapsed) < goodWindow && n.note === note)
       if (hitNote && !hitNotesRef.current.has(hitNote.time)) {
-        updateScore(100) // Perfect
+        const timingError = Math.abs(hitNote.time - elapsed)
+        let points = 50 // Miss by default
+        if (timingError < perfectWindow) {
+          points = 100 // Perfect
+          // TODO: Add green flash effect
+        } else {
+          points = 50 // Good
+          // TODO: Add yellow flash
+        }
+        updateScore(points * (1 + Math.floor(gameState.combo / 10))) // Multiplier based on combo
+        updateCombo(1)
+        updateHealth(2) // Small health boost on hit
         hitNotesRef.current.add(hitNote.time)
       } else {
         updateScore(-10) // Wrong press
+        updateCombo(-1)
+        updateHealth(-2)
+        // TODO: Red flash on wrong
       }
     }
   }
@@ -163,26 +223,40 @@ function PianoDemo() {
     updateMyPresence({ instrument: e.target.value })
   }
 
-  const isGameOver = gameState && !gameState.isPlaying && (Date.now() - (gameState.startTime || 0) > SONG_DURATION)
-
-  console.log("gameState", gameState)
-  console.log("gameState.isPlaying", gameState?.isPlaying)
-  console.log("isGameOver", isGameOver)
+  const isGameOver = gameState && !gameState.isPlaying && (Date.now() - (gameState.startTime || 0) > songDuration)
+  const myScore = gameState?.scores?.get(myNotes.id.toString()) || 0
+  const highScore = parseInt(localStorage.getItem('highScore') || '0', 10) // Parse to number
+  if (isGameOver && myScore > highScore) localStorage.setItem('highScore', myScore.toString())
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex justify-center items-center relative overflow-hidden">
-      {/* Animated background elements */}
+    <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 flex justify-center items-center relative overflow-hidden">
+      {/* Animated cosmic background */}
       <div className="absolute inset-0 overflow-hidden">
-        <div className="absolute -top-40 -right-40 w-80 h-80 bg-purple-500 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-blob"></div>
-        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-pink-500 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-blob animation-delay-2000"></div>
-        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-80 h-80 bg-purple-600 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-blob animation-delay-4000"></div>
+        <div className="absolute -top-40 -right-40 w-96 h-96 bg-pink-500 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob"></div>
+        <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-indigo-500 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob animation-delay-2000"></div>
+        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-purple-600 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob animation-delay-4000"></div>
       </div>
 
-      {/* Start Button */}
+      {/* MIDI Uploader */}
       {!gameState?.isPlaying && !isGameOver && (
-        <button 
-          onClick={startGame} 
-          className="absolute top-8 left-8 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white px-6 py-3 rounded-lg font-semibold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200 z-30"
+        <Dropzone onDrop={handleMidiUpload} accept={{ 'audio/midi': ['.mid', '.midi'] }}>
+          {({ getRootProps, getInputProps }) => (
+            <div {...getRootProps()} className="absolute top-8 left-1/2 transform -translate-x-1/2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white px-6 py-3 rounded-lg font-semibold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200 z-30 cursor-pointer">
+              <input {...getInputProps()} />
+              Upload MIDI Song
+            </div>
+          )}
+        </Dropzone>
+      )}
+
+      {/* Song Title */}
+      <h2 className="absolute top-20 left-1/2 transform -translate-x-1/2 text-white text-3xl font-bold z-30">{songName}</h2>
+
+      {/* Start Button */}
+      {!gameState?.isPlaying && !isGameOver && songNotes.length > 0 && (
+        <button
+          onClick={startGame}
+          className="absolute top-32 left-1/2 transform -translate-x-1/2 bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600 text-white px-8 py-4 rounded-xl font-bold shadow-xl hover:shadow-2xl transform hover:scale-105 transition-all duration-300 z-30"
         >
           Start Game
         </button>
@@ -190,62 +264,71 @@ function PianoDemo() {
 
       {/* Falling Notes Overlay */}
       <div className="absolute top-0 left-0 w-full h-full pointer-events-none overflow-hidden z-10">
-        {gameState?.isPlaying && sampleSong.map((songNote: SongNote, i) => {
+        {gameState?.isPlaying && songNotes.map((songNote: SongNote, i) => {
           const elapsed = Date.now() - gameState.startTime
-          const fallDuration = 5 // seconds to fall
+          const fallDuration = 5 // seconds to fall (adjust speed)
           const position = ((songNote.time - elapsed) / 1000) / fallDuration // 0 to 1 (top to bottom)
-          if (position > -1 && position < 1) { // Visible
-            const keyIndex = songNote.note - MidiNumbers.fromNote('c3') // Adjust for note range
+          if (position > -0.2 && position < 1.2) { // Slightly extended visibility
+            const keyIndex = songNote.note - MidiNumbers.fromNote('c3') // Adjust for your note range
             const keyWidth = 1000 / 25 // Approx, adjust for your piano width / num keys
             return (
               <motion.div
                 key={i}
-                initial={{ y: '-100%' }}
-                animate={{ y: '100%' }}
+                initial={{ y: '-100%', opacity: 0 }}
+                animate={{ y: '100%', opacity: 1 }}
                 transition={{ duration: fallDuration, ease: 'linear', delay: position * -fallDuration }}
-                style={{ left: `${keyIndex * keyWidth}px`, width: `${keyWidth}px` }}
-                className="absolute h-4 bg-gradient-to-b from-blue-400 to-blue-600 rounded-full shadow-lg"
-              />
+                style={{ left: `${keyIndex * keyWidth}px`, width: `${keyWidth * 0.8}px` }} // Slightly narrower for style
+                className="absolute h-8 bg-gradient-to-b from-cyan-400 to-blue-600 rounded-full shadow-lg filter blur-sm opacity-80"
+              >
+                {/* Glowing trail */}
+                <div className="absolute inset-0 bg-cyan-300 rounded-full animate-pulse opacity-50" />
+              </motion.div>
             )
           }
           return null
         })}
       </div>
 
-      {/* Scores Display */}
+      {/* Hit Zone Indicator */}
+      <div className="absolute bottom-0 left-0 w-full h-16 bg-gradient-to-t from-blue-500/20 to-transparent z-10" />
+
+      {/* Scores/Combo/Health Display */}
       <div className="absolute top-8 right-8 bg-white/10 backdrop-blur-md p-6 rounded-2xl shadow-2xl border border-white/20 z-30">
-        <h3 className="text-white font-bold text-lg mb-3">Scores</h3>
-        <div className="space-y-2">
-          {gameState && Array.from(gameState.scores.entries()).map(([userId, score]) => (
-            <div key={userId} className="flex justify-between items-center text-white/90">
-              <span className="font-medium">{userId === myNotes?.id?.toString() ? 'You' : `Player ${userId}`}</span>
-              <span className="font-bold ml-4">{score}</span>
-            </div>
-          ))}
+        <h3 className="text-white font-bold text-lg mb-3">Score: {myScore}</h3>
+        <p className="text-white/90">Combo: {gameState?.combo || 0}x</p>
+        <p className="text-white/90">Health:</p>
+        <div className="w-32 h-2 bg-red-900 rounded-full overflow-hidden">
+          <div
+            className="h-full bg-gradient-to-r from-red-500 to-green-500 transition-all duration-300"
+            style={{ width: `${gameState?.health || 100}%` }}
+          />
         </div>
       </div>
 
-      {/* Game Over Screen */}
+      {/* Game Over Screen with Confetti */}
       {isGameOver && (
-        <motion.div 
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          className="absolute inset-0 bg-black/80 backdrop-blur-sm flex justify-center items-center z-40"
-        >
+        <>
+          {myScore > highScore && <Confetti width={window.innerWidth} height={window.innerHeight} />}
           <motion.div
-            initial={{ scale: 0.8, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{ delay: 0.2 }}
-            className="bg-gradient-to-br from-purple-900/90 to-pink-900/90 p-12 rounded-3xl shadow-2xl border border-white/20 text-center"
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col justify-center items-center z-40"
           >
-            <h2 className="text-4xl font-bold text-white mb-6">Game Over!</h2>
-            <p className="text-xl text-white/80">Check the final scores above</p>
+            <h2 className="text-5xl font-bold text-white mb-6 animate-bounce">Game Over!</h2>
+            <p className="text-2xl text-white/80 mb-4">Your Score: {myScore}</p>
+            <p className="text-xl text-yellow-400 mb-8">High Score: {Math.max(myScore, highScore)}</p>
+            <button
+              onClick={() => location.reload()} // Restart
+              className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white px-8 py-4 rounded-xl font-bold shadow-xl hover:shadow-2xl transform hover:scale-105 transition-all duration-300"
+            >
+              Play Again
+            </button>
           </motion.div>
-        </motion.div>
+        </>
       )}
 
-      {/* Existing piano UI */}
-      <div className="flex flex-col drop-shadow-2xl z-20 animate-slide-up">
+      {/* Piano UI */}
+      <div className="flex flex-col drop-shadow-2xl z-20 animate-slide-up absolute bottom-0 w-full max-w-6xl">
         <div className="bg-white/10 backdrop-blur-md mb-[2px] flex justify-end rounded-t-2xl overflow-hidden border border-white/20 border-b-0">
           <div className="p-6 pr-0 sm:pr-6 flex flex-grow">
             <Avatar url={myNotes?.picture} color={myNotes?.color} />
@@ -281,7 +364,7 @@ function PianoDemo() {
       <motion.div
         animate={{ opacity: [1, 0] }}
         transition={{ transitionEnd: { display: 'none' } }}
-        className="absolute inset-0 bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 z-30"
+        className="absolute inset-0 bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 z-30"
       />
     </div>
   )
